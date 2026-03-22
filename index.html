@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apocalypse: True Survival - Plain World Fixed</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1e2b1b; color: white; font-family: 'Courier New', Courier, monospace; user-select: none; }
+        canvas { display: block; }
+        
+        #hud { position: absolute; top: 10px; left: 10px; pointer-events: none; }
+        .stat { font-size: 20px; margin-bottom: 5px; text-shadow: 2px 2px 0 #000; }
+        #expBarContainer { width: 300px; height: 15px; background: #333; border: 2px solid #555; margin-top: 10px; }
+        #expBar { width: 0%; height: 100%; background: #0df; transition: width 0.2s; }
+        
+        #controls { position: absolute; bottom: 20px; left: 20px; display: flex; gap: 10px; z-index: 5; }
+        button { padding: 10px 20px; font-size: 16px; font-weight: bold; background: #333; color: white; border: 2px solid #555; cursor: pointer; border-radius: 5px; }
+        button:hover { background: #555; }
+        .active-btn { background: #0a0; border-color: #0f0; }
+
+        .overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: none; flex-direction: column; align-items: center; justify-content: center; z-index: 10; }
+        .panel { background: #222; border: 3px solid #0df; padding: 30px; border-radius: 10px; text-align: center; max-width: 500px; width: 100%; box-shadow: 0 0 20px #0df; }
+        .shop-item { display: flex; justify-content: space-between; align-items: center; background: #111; padding: 10px; margin: 10px 0; border: 1px solid #444; }
+        .shop-item button { background: #d0b000; color: black; border: none; font-weight:bold; }
+        
+        #climbUI { position: absolute; top: 20%; left: 50%; transform: translateX(-50%); text-align: center; display: none; background: rgba(0,0,0,0.8); padding: 20px; border: 3px solid yellow; border-radius: 10px; pointer-events: none; z-index: 5;}
+        #climbUI h1 { color: yellow; margin: 0; }
+    </style>
+</head>
+<body>
+
+<div id="hud">
+    <div class="stat">Level: <span id="lvlDisp">1</span></div>
+    <div class="stat">Coins: 🟡 <span id="coinDisp">0</span></div>
+    <div class="stat">Kills: 💀 <span id="killDisp">0</span></div>
+    <div class="stat">Weapon: <span id="weapDisp" style="color:yellow;">Stone 🪨</span></div>
+    <div class="stat" id="mountainStatus" style="color:#0df; display:none;">🏔️ ON MOUNTAIN (SAFE)</div>
+    <div id="expBarContainer"><div id="expBar"></div></div>
+</div>
+
+<div id="climbUI">
+    <h1>CLICK FAST TO CLIMB!</h1>
+    <h2>Clicks: <span id="climbClickDisp">0</span> / 10</h2>
+    <h3 style="color:red;">Time: <span id="climbTimeDisp">10</span>s</h3>
+</div>
+
+<div id="controls">
+    <button id="fireToggle" class="active-btn" onclick="toggleFireMode()">Auto-Attack: ON</button>
+    <button onclick="openShop()">Shop (Pause)</button>
+    <button id="nukeBtn" style="display:none; background:#f00; border-color:yellow; color:yellow;" onclick="useNuke()">LAUNCH NUKE ☢️</button>
+</div>
+
+<div id="shopScreen" class="overlay">
+    <div class="panel">
+        <h2 style="color: #0df;">SURVIVAL CRAFT & SHOP</h2>
+        <p>Coins: 🟡 <span id="shopCoins">0</span></p>
+        <div class="shop-item"><span>Next Weapon: <b id="nextWeapName">Stick 🦯</b></span><button id="buyWeaponBtn" onclick="buyNextWeapon()">Cost: 30</button></div>
+        <div class="shop-item"><span>Heal to Full 💖</span><button onclick="buyHealth()">Cost: 30</button></div>
+        <br><button onclick="closeShop()" style="background:#0df; color:black;">Resume Game</button>
+    </div>
+</div>
+
+<div id="gameOverScreen" class="overlay">
+    <div class="panel">
+        <h2 style="color: #f00;">YOU DIED</h2>
+        <p>Level Reached: <span id="finalLvl"></span></p>
+        <button onclick="restartGame()" style="margin-top:20px;">RESTART</button>
+    </div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+
+    // TRUE SURVIVAL WEAPON TREE
+    const weapons = [
+        { name: "Stone 🪨", cost: 0, type: 'melee', fireRate: 800, dmg: 15, range: 60, color: 'gray' },
+        { name: "Stick 🦯", cost: 30, type: 'melee', fireRate: 500, dmg: 20, range: 90, color: '#8B4513' },
+        { name: "Spear 🔱", cost: 80, type: 'melee', fireRate: 600, dmg: 35, range: 140, color: 'silver' },
+        { name: "Sword 🗡️", cost: 150, type: 'melee', fireRate: 350, dmg: 40, range: 110, color: 'cyan' },
+        { name: "Bow 🏹", cost: 300, type: 'gun', fireRate: 500, dmg: 30, count: 1, spread: 0, pierce: true },
+        { name: "Pistol 🔫", cost: 500, type: 'gun', fireRate: 400, dmg: 25, count: 1, spread: 0, pierce: false },
+        { name: "Shotgun 💥", cost: 800, type: 'gun', fireRate: 800, dmg: 18, count: 4, spread: 0.3, pierce: false },
+        { name: "Assault Rifle 🔫", cost: 1500, type: 'gun', fireRate: 150, dmg: 22, count: 1, spread: 0.1, pierce: false },
+        { name: "Sniper 🔭", cost: 2500, type: 'gun', fireRate: 1200, dmg: 150, count: 1, spread: 0, pierce: true },
+        { name: "Nuke ☢️", cost: 5000, type: 'nuke' }
+    ];
+
+    let isPaused = false; let state = 'playing'; let autoFire = true; let camera = { x: 0, y: 0 }; let frameCount = 0;
+    let player = { x: 0, y: 0, size: 30, baseSpeed: 5, hp: 100, maxHp: 100, level: 1, exp: 0, maxExp: 100, invuln: 0, meleeTimer: 0 };
+    let coins = 0; let kills = 0; let weaponIdx = 0;
+    
+    let isClimbing = false; let climbClicks = 0; let climbTimer = 0; let onMountain = false;
+
+    let enemies = []; let projectiles = []; let drops = []; let particles = []; 
+    
+    let mountainZones = []; let forestZones = []; let ruinsZones = [];
+
+    const keys = { w: false, a: false, s: false, d: false };
+    const mouse = { x: canvas.width/2, y: canvas.height/2, down: false };
+    let lastShot = 0;
+
+    function generateWorld() {
+        mountainZones = []; forestZones = []; ruinsZones = [];
+        
+        // Mountains
+        for(let i=0; i<30; i++) {
+            let cx = (Math.random() - 0.5) * 10000; let cy = (Math.random() - 0.5) * 10000;
+            let radius = 100 + Math.random() * 80; 
+            let elements = [];
+            for(let j=0; j<80; j++) {
+                let angle = Math.random() * Math.PI * 2; let r = Math.random() * radius;
+                elements.push({ x: cx + Math.cos(angle)*r, y: cy + Math.sin(angle)*r, type: '🪨', size: 60 + Math.random()*40 });
+            }
+            elements.push({ x: cx, y: cy-20, type: '⛰️', size: 120 });
+            mountainZones.push({ cx: cx, cy: cy, radius: radius, elements: elements });
+        }
+
+        // Denser Forests
+        for(let i=0; i<40; i++) {
+            let cx = (Math.random() - 0.5) * 10000; let cy = (Math.random() - 0.5) * 10000;
+            let radius = 200 + Math.random() * 150;
+            let elements = [];
+            let treeType = Math.random() > 0.5 ? '🌲' : '🌳';
+            for(let j=0; j<80; j++) {
+                let angle = Math.random() * Math.PI * 2; let r = Math.random() * radius;
+                let size = 50 + Math.random()*30;
+                // FIX: Tiny, tight mathematical hitbox to simulate emoji symbol collision
+                elements.push({ x: cx + Math.cos(angle)*r, y: cy + Math.sin(angle)*r, type: treeType, size: size, hitbox: size * 0.3 });
+            }
+            forestZones.push({ cx: cx, cy: cy, radius: radius, elements: elements });
+        }
+
+        // Ruins (Plains decor)
+        for(let i=0; i<20; i++) {
+            let cx = (Math.random() - 0.5) * 10000; let cy = (Math.random() - 0.5) * 10000;
+            let radius = 100; let elements = [];
+            for(let j=0; j<10; j++) {
+                let angle = Math.random() * Math.PI * 2; let r = Math.random() * radius;
+                elements.push({ x: cx + Math.cos(angle)*r, y: cy + Math.sin(angle)*r, type: Math.random()>0.5?'🏚️':'🧱', size: 50 });
+            }
+            ruinsZones.push({ cx: cx, cy: cy, radius: radius, elements: elements });
+        }
+    }
+    generateWorld();
+
+    window.addEventListener('keydown', e => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
+    window.addEventListener('keyup', e => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+    
+    window.addEventListener('mousedown', () => {
+        mouse.down = true;
+        if (isClimbing) {
+            climbClicks++;
+            document.getElementById('climbClickDisp').innerText = climbClicks;
+            if (climbClicks >= 10) {
+                isClimbing = false; onMountain = true;
+                document.getElementById('climbUI').style.display = 'none';
+                document.getElementById('mountainStatus').style.display = 'block';
+            }
+        }
+    });
+    window.addEventListener('mouseup', () => mouse.down = false);
+    window.addEventListener('resize', () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; });
+
+    function toggleFireMode() { autoFire = !autoFire; document.getElementById('fireToggle').innerText = `Auto-Attack: ${autoFire ? 'ON' : 'OFF'}`; document.getElementById('fireToggle').className = autoFire ? 'active-btn' : ''; }
+    function openShop() { isPaused = true; document.getElementById('shopScreen').style.display = 'flex'; document.getElementById('shopCoins').innerText = coins; }
+    function closeShop() { isPaused = false; document.getElementById('shopScreen').style.display = 'none'; }
+    
+    function buyNextWeapon() {
+        if (weaponIdx < weapons.length - 1) {
+            let nextW = weapons[weaponIdx + 1];
+            if (coins >= nextW.cost) {
+                coins -= nextW.cost; weaponIdx++;
+                document.getElementById('weapDisp').innerText = weapons[weaponIdx].name;
+                if (weapons[weaponIdx].type === 'nuke') {
+                    document.getElementById('nukeBtn').style.display = 'block'; document.getElementById('buyWeaponBtn').innerText = "MAXED OUT"; document.getElementById('buyWeaponBtn').disabled = true;
+                } else {
+                    let upcoming = weapons[weaponIdx + 1]; document.getElementById('nextWeapName').innerText = upcoming.name; document.getElementById('buyWeaponBtn').innerText = `Cost: ${upcoming.cost}`;
+                }
+                updateHUD();
+            }
+        }
+    }
+
+    function buyHealth() { if (coins >= 30) { coins -= 30; player.hp = player.maxHp; updateHUD(); } }
+    
+    function useNuke() {
+        createExplosion(player.x, player.y, 3000, '#ff0');
+        enemies.forEach(e => { drops.push({ x: e.x, y: e.y, type: 'exp', val: 20 }); kills++; });
+        enemies = []; document.getElementById('nukeBtn').style.display = 'none'; weaponIdx--; 
+        let upcoming = weapons[weaponIdx + 1]; document.getElementById('weapDisp').innerText = weapons[weaponIdx].name;
+        document.getElementById('nextWeapName').innerText = upcoming.name; document.getElementById('buyWeaponBtn').innerText = `Cost: ${upcoming.cost}`; document.getElementById('buyWeaponBtn').disabled = false; updateHUD();
+    }
+
+    function gainExp(amount) { player.exp += amount; if (player.exp >= player.maxExp) { player.level++; player.exp -= player.maxExp; player.maxExp = Math.floor(player.maxExp * 1.5); player.maxHp += 20; player.hp = player.maxHp; createExplosion(player.x, player.y, 100, '#0df'); } updateHUD(); }
+    
+    function updateHUD() {
+        document.getElementById('lvlDisp').innerText = player.level; document.getElementById('coinDisp').innerText = coins;
+        document.getElementById('killDisp').innerText = kills; document.getElementById('expBar').style.width = `${(player.exp / player.maxExp) * 100}%`;
+        document.getElementById('shopCoins').innerText = coins;
+    }
+
+    function spawnEnemy() {
+        let ex, ey, validSpawn = false;
+        while(!validSpawn) {
+            ex = player.x + (Math.random() - 0.5) * 2500; ey = player.y + (Math.random() - 0.5) * 2500;
+            if (Math.hypot(ex - player.x, ey - player.y) > 800) {
+                validSpawn = true;
+                for(let m of mountainZones) { if (Math.hypot(ex - m.cx, ey - m.cy) < m.radius) validSpawn = false; }
+            }
+        }
+        enemies.push({ x: ex, y: ey, size: 30, hp: 20 + (player.level * 5), maxHp: 20 + (player.level * 5), baseSpeed: 1.5 + Math.random() * 0.8, state: 'idle', vision: 150, alertRange: 750, attackState: 'idle', attackTimer: 0, attackDuration: 0, rotation: 0, scale: 1, attackCooldown: 0, wobbleOffset: Math.random() * Math.PI * 2 });
+    }
+
+    function shoot(tX, tY) {
+        let w = weapons[weaponIdx];
+        if (w.type === 'melee') return; 
+        let angle = Math.atan2(tY - player.y, tX - player.x);
+        for(let i=0; i<w.count; i++) {
+            let spreadAngle = angle + (Math.random() - 0.5) * w.spread;
+            projectiles.push({ x: player.x, y: player.y, vx: Math.cos(spreadAngle) * 20, vy: Math.sin(spreadAngle) * 20, dmg: w.dmg, piercing: w.pierce, hitList: [], type: w.name.includes('Bow') ? '🏹' : '🔥' });
+        }
+        lastShot = Date.now();
+    }
+
+    function getNearestEnemy(chasingOnly = false) {
+        let nearest = null; let minDist = Infinity;
+        enemies.forEach(e => {
+            if (chasingOnly && e.state !== 'chasing') return;
+            let dist = Math.hypot(e.x - player.x, e.y - player.y);
+            if (dist < minDist) { minDist = dist; nearest = e; }
+        });
+        return nearest;
+    }
+
+    function createExplosion(x, y, count, color) { for(let i=0; i<count; i++) particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 15, vy: (Math.random() - 0.5) * 15, life: 30, color: color }); }
+
+    function attemptDamage(e) {
+        if (Math.hypot(e.x - player.x, e.y - player.y) < player.size/2 + e.size/2 + 20 && player.invuln <= 0 && !onMountain) {
+            player.hp -= 15; player.invuln = 30; createExplosion(player.x, player.y, 15, 'red');
+            if (player.hp <= 0) { state = 'dead'; document.getElementById('finalLvl').innerText = player.level; document.getElementById('gameOverScreen').style.display = 'flex'; }
+        }
+    }
+
+    function restartGame() { location.reload(); }
+
+    function update() {
+        if (isPaused || state === 'dead') return;
+        frameCount++;
+        if (player.invuln > 0) player.invuln--;
+
+        let inTree = false; let nearMountainZone = null;
+        
+        // ZONE COLLISION CHECK
+        for(let m of mountainZones) { if (Math.hypot(player.x - m.cx, player.y - m.cy) < m.radius + 20) nearMountainZone = m; }
+
+        // TREE HITBOX LOGIC (TIGHTIZED FOR PLAYER TO MATCH Visual Symbol)
+        for(let f of forestZones) { 
+            // Broad phase to save performance
+            if (Math.hypot(player.x - f.cx, player.y - f.cy) < f.radius + 100) {
+                // Precise narrow phase
+                for (let tree of f.elements) {
+                    if (Math.hypot(player.x - tree.x, player.y - tree.y) < tree.hitbox) { inTree = true; break; }
+                }
+            }
+            if (inTree) break;
+        }
+
+        let currentSpeed = inTree ? player.baseSpeed / 1.5 : player.baseSpeed;
+
+        if (nearMountainZone && !onMountain && !isClimbing) {
+            isClimbing = true; climbClicks = 0; climbTimer = 600; 
+            document.getElementById('climbUI').style.display = 'block';
+        }
+        
+        if (isClimbing) {
+            climbTimer--; document.getElementById('climbTimeDisp').innerText = (climbTimer / 60).toFixed(1);
+            if (climbTimer <= 0) {
+                isClimbing = false; player.hp -= 20; player.invuln = 30;
+                let angle = Math.atan2(player.y - nearMountainZone.cy, player.x - nearMountainZone.cx);
+                player.x += Math.cos(angle) * 100; player.y += Math.sin(angle) * 100;
+                document.getElementById('climbUI').style.display = 'none';
+                if (player.hp <= 0) { state = 'dead'; document.getElementById('gameOverScreen').style.display = 'flex'; }
+            }
+        }
+
+        if (!nearMountainZone && onMountain) { onMountain = false; document.getElementById('mountainStatus').style.display = 'none'; }
+
+        let moving = false;
+        if (!isClimbing) {
+            if (keys.w) { player.y -= currentSpeed; moving = true; }
+            if (keys.s) { player.y += currentSpeed; moving = true; }
+            if (keys.a) { player.x -= currentSpeed; moving = true; }
+            if (keys.d) { player.x += currentSpeed; moving = true; }
+        }
+        player.wobble = moving ? Math.sin(frameCount * 0.2) * 5 : 0;
+        camera.x = canvas.width / 2 - player.x; camera.y = canvas.height / 2 - player.y;
+
+        let w = weapons[weaponIdx];
+        if (!isClimbing && Date.now() - lastShot > w.fireRate) {
+            if (w.type === 'gun') {
+                if (autoFire) { 
+                    let t = getNearestEnemy(true); if (!t) t = getNearestEnemy(false);
+                    if (t && Math.hypot(t.x - player.x, t.y - player.y) < 1000) shoot(t.x, t.y); 
+                } else if (mouse.down) shoot(mouse.x - camera.x, mouse.y - camera.y);
+            } else if (w.type === 'melee') {
+                let attacked = false;
+                if (autoFire) {
+                    let target = getNearestEnemy(false);
+                    if (target && Math.hypot(target.x - player.x, target.y - player.y) <= w.range) attacked = true;
+                } else if (mouse.down) {
+                    attacked = true;
+                }
+
+                if (attacked) {
+                    enemies.forEach(e => {
+                        if (Math.hypot(e.x - player.x, e.y - player.y) <= w.range + e.size/2) {
+                            e.hp -= w.dmg; createExplosion(e.x, e.y, 5, 'white');
+                        }
+                    });
+                    lastShot = Date.now();
+                    player.meleeTimer = 15;
+                }
+            }
+        }
+
+        for (let i = projectiles.length - 1; i >= 0; i--) {
+            let p = projectiles[i]; p.x += p.vx; p.y += p.vy; let destroyed = false;
+            for (let j = enemies.length - 1; j >= 0; j--) {
+                let e = enemies[j];
+                if (!p.hitList.includes(e) && Math.hypot(e.x - p.x, e.y - p.y) < e.size) {
+                    e.hp -= p.dmg; p.hitList.push(e);
+                    if (!p.piercing) destroyed = true; if (destroyed) break;
+                }
+            }
+            if (destroyed || Math.hypot(p.x - player.x, p.y - player.y) > 1500) projectiles.splice(i, 1);
+        }
+
+        for (let j = enemies.length - 1; j >= 0; j--) {
+            let e = enemies[j];
+            if (e.hp <= 0) {
+                createExplosion(e.x, e.y, 15, 'red'); drops.push({ x: e.x, y: e.y, type: 'exp', val: 15 });
+                if (Math.random() < 0.4) drops.push({ x: e.x + 20, y: e.y, type: 'coin', val: 5 });
+                enemies.splice(j, 1); kills++; updateHUD(); continue;
+            }
+
+            let distToPlayer = Math.hypot(e.x - player.x, e.y - player.y);
+
+            if (onMountain) { e.state = 'idle'; } 
+            else if (distToPlayer < e.vision) {
+                e.state = 'chasing';
+                if (frameCount % 10 === 0) {
+                    enemies.forEach(other => { if (other.state === 'idle' && Math.hypot(e.x - other.x, e.y - other.y) < e.alertRange) other.state = 'chasing'; });
+                }
+            }
+
+            // TREE HITBOX LOGIC (TIGHTIZED FOR ZOMBIES)
+            let zInTree = false;
+            for(let f of forestZones) { 
+                if (Math.hypot(e.x - f.cx, e.y - f.cy) < f.radius + 100) {
+                    for (let tree of f.elements) {
+                        if (Math.hypot(e.x - tree.x, e.y - tree.y) < tree.hitbox) { zInTree = true; break; }
+                    }
+                }
+                if (zInTree) break;
+            }
+            
+            let zSpeed = zInTree ? e.baseSpeed / 1.5 : e.baseSpeed;
+
+            for(let m of mountainZones) {
+                if (Math.hypot(e.x - m.cx, e.y - m.cy) < m.radius) {
+                    let angle = Math.atan2(e.y - m.cy, e.x - m.cx);
+                    e.x += Math.cos(angle) * (zSpeed + 1); e.y += Math.sin(angle) * (zSpeed + 1);
+                }
+            }
+
+            if (e.state === 'chasing') {
+                if (e.attackCooldown > 0) e.attackCooldown--;
+
+                if (e.attackState === 'idle') {
+                    let angle = Math.atan2(player.y - e.y, player.x - e.x);
+                    e.x += Math.cos(angle) * zSpeed; e.y += Math.sin(angle) * zSpeed;
+                    e.wobble = Math.sin(frameCount * 0.1 + e.wobbleOffset) * 5; e.rotation = 0; e.scale = 1;
+
+                    if (distToPlayer < 80 && e.attackCooldown <= 0) {
+                        e.attackState = Math.random() < 0.5 ? 'jump' : 'smash'; e.attackDuration = 35; e.attackTimer = 35;
+                    }
+                } else {
+                    e.attackTimer--; let progress = 1 - (e.attackTimer / e.attackDuration);
+                    let angle = Math.atan2(player.y - e.y, player.x - e.x);
+                    
+                    if (e.attackState === 'jump') {
+                        if (progress < 0.5) { e.scale = 1 + progress; e.y -= 1; }
+                        else { e.scale = 2 - progress; e.x += Math.cos(angle)*(zSpeed*3); e.y += Math.sin(angle)*(zSpeed*3); }
+                        if (e.attackTimer === 17) attemptDamage(e);
+                    } else if (e.attackState === 'smash') {
+                        if (progress < 0.5) { e.rotation = -0.6; }
+                        else { e.rotation = 0.6; e.x += Math.cos(angle)*(zSpeed*2); e.y += Math.sin(angle)*(zSpeed*2); }
+                        if (e.attackTimer === 17) attemptDamage(e);
+                    }
+                    if (e.attackTimer <= 0) { e.attackState = 'idle'; e.attackCooldown = 50; }
+                }
+            } else {
+                if (frameCount % 60 === 0 && Math.random() < 0.2) e.wobbleOffset = Math.random() * Math.PI * 2; 
+                e.x += Math.cos(e.wobbleOffset) * (zSpeed * 0.3); e.y += Math.sin(e.wobbleOffset) * (zSpeed * 0.3);
+                e.wobble = Math.sin(frameCount * 0.05) * 2;
+            }
+        }
+
+        for (let i = drops.length - 1; i >= 0; i--) {
+            let d = drops[i];
+            if (Math.hypot(d.x - player.x, d.y - player.y) < player.size + 30) {
+                if (d.type === 'coin') coins += d.val; if (d.type === 'exp') gainExp(d.val);
+                drops.splice(i, 1); updateHUD();
+            }
+        }
+
+        if (frameCount % 30 === 0 && enemies.length < 100) spawnEnemy();
+    }
+
+    function draw() {
+        ctx.fillStyle = '#1e2b1b'; ctx.fillRect(0, 0, canvas.width, canvas.height); 
+        ctx.save(); ctx.translate(camera.x, camera.y);
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+        function onScreen(x, y) { return x > player.x - canvas.width/2 - 200 && x < player.x + canvas.width/2 + 200 && y > player.y - canvas.height/2 - 200 && y < player.y + canvas.height/2 + 200; }
+
+        ruinsZones.forEach(z => { z.elements.forEach(s => { if (onScreen(s.x, s.y)) { ctx.font = `${s.size}px Arial`; ctx.fillText(s.type, s.x, s.y); } }); });
+        
+        forestZones.forEach(z => { 
+            z.elements.forEach(s => { 
+                if (onScreen(s.x, s.y)) { 
+                    // NO VISIBLE CIRCLE. The symbol itself is the boundary.
+                    ctx.font = `${s.size}px Arial`; ctx.fillText(s.type, s.x, s.y); 
+                } 
+            }); 
+        });
+        
+        mountainZones.forEach(z => { z.elements.forEach(s => { if (onScreen(s.x, s.y)) { ctx.font = `${s.size}px Arial`; ctx.fillText(s.type, s.x, s.y); } }); });
+
+        drops.forEach(d => { ctx.font = '20px Arial'; ctx.fillText(d.type === 'coin' ? '🟡' : '🔵', d.x, d.y + Math.sin(frameCount * 0.1)*3); });
+        projectiles.forEach(p => { ctx.font = '20px Arial'; ctx.fillText(p.type, p.x, p.y); });
+
+        enemies.forEach(e => {
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.2)'; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(e.x, e.y, e.vision, 0, Math.PI*2); ctx.stroke();
+            ctx.save(); ctx.translate(e.x, e.y + e.wobble); ctx.rotate(e.rotation); ctx.scale(e.scale, e.scale);
+            ctx.font = `${e.size}px Arial`; ctx.fillText('🧟', 0, 0);
+            if (e.attackState === 'smash' && e.attackTimer < e.attackDuration/2) { ctx.font = `${e.size/1.2}px Arial`; ctx.fillText('🖐️', 20, -15); }
+            ctx.restore();
+            ctx.fillStyle = 'red'; ctx.fillRect(e.x - e.size/2, e.y - e.size/2 - 15, e.size * (e.hp / e.maxHp), 4);
+        });
+
+        if (player.invuln === 0 || Math.floor(frameCount / 5) % 2 === 0) { ctx.font = `${player.size}px Arial`; ctx.fillText(onMountain ? '🧗' : '🤠', player.x, player.y + player.wobble); }
+
+        // MELEE SWING VISUAL
+        let w = weapons[weaponIdx];
+        if (w.type === 'melee' && !isClimbing && player.meleeTimer > 0) {
+            player.meleeTimer--;
+            ctx.strokeStyle = w.color; 
+            ctx.lineWidth = 6; 
+            ctx.beginPath(); 
+            ctx.arc(player.x, player.y, w.range, frameCount * 0.3, frameCount * 0.3 + Math.PI); 
+            ctx.stroke(); 
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i]; ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.life/5, 0, Math.PI*2); ctx.fill();
+            p.x += p.vx; p.y += p.vy; p.life--; if(p.life <= 0) particles.splice(i, 1);
+        }
+
+        ctx.restore();
+        ctx.fillStyle = '#333'; ctx.fillRect(canvas.width/2 - 150, canvas.height - 40, 300, 20);
+        ctx.fillStyle = state === 'dead' ? 'red' : '#0f0'; ctx.fillRect(canvas.width/2 - 150, canvas.height - 40, 300 * (Math.max(0, player.hp) / player.maxHp), 20);
+        ctx.fillStyle = 'white'; ctx.font = '16px Courier New'; ctx.fillText(`HP: ${Math.floor(player.hp)} / ${player.maxHp}`, canvas.width/2, canvas.height - 30);
+    }
+
+    function loop() { update(); draw(); requestAnimationFrame(loop); }
+    updateHUD(); loop();
+</script>
+</body>
+</html>
